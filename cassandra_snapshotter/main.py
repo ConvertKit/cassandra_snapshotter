@@ -126,7 +126,8 @@ def restore_backup(args):
                            cassandra_bin_dir=args.cassandra_bin_dir,
                            restore_dir=args.restore_dir,
                            no_sstableloader=args.no_sstableloader,
-                           local_restore=args.local_restore)
+                           local_restore=args.local_restore,
+                           s3_connection_host=get_s3_connection_host(args.s3_bucket_region))
 
     if args.hosts:
         hosts = args.hosts.split(',')
