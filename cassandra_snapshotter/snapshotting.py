@@ -224,7 +224,7 @@ class RestoreWorker(object):
         key_full_path = os.path.join(self.restore_dir, filename)
         bucket = self.s3connection.get_bucket(
             self.snapshot.s3_bucket, validate=False)
-        key_object =  bucket.get_key(key.name)
+        key_object = bucket.get_key(key.name)
         key_final_path = key_full_path
         key_metadata_mtime = key_object.get_metadata('mtime')
         key_metadata_atime = key_object.get_metadata('atime')

@@ -73,7 +73,7 @@ def upload_file(bucket, source, destination, s3_ssenc, bufsize, reduced_redundan
                     atime_epoch = os.path.getatime(source)
                     ctime_epoch = os.path.getctime(source)
                     file_mtime = time.strftime('%Y-%m-%d:%H:%M:%S:%Z', time.localtime(mtime_epoch))
-                    mp = bucket.initiate_multipart_upload(destination, encrypt_key=s3_ssenc, reduced_redundancy=reduced_redundancy, metadata={'modified': file_mtime,'mtime': mtime_epoch, 'atime': atime_epoch, 'ctime': ctime_epoch})
+                    mp = bucket.initiate_multipart_upload(destination, encrypt_key=s3_ssenc, reduced_redundancy=reduced_redundancy, metadata={'modified': file_mtime, 'mtime': mtime_epoch, 'atime': atime_epoch, 'ctime': ctime_epoch})
                     logger.info("Initialized multipart upload for file {!s} to {!s}".format(source, destination))
                 except Exception as exc:
                     logger.error("Error while initializing multipart upload for file {!s} to {!s}".format(source, destination))
