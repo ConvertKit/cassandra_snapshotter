@@ -219,10 +219,12 @@ class RestoreWorker(object):
         # We don't want any host prefix because we restore from only one host
         if self.local_restore:
             prefix = ''
-
+            
         filename = "{}/{}/{}{}".format(keyspace, table, prefix, file)
         key_full_path = os.path.join(self.restore_dir, filename)
-
+        key_metadata_mtime = key.get_metadata('x-amz-metadata-mtime')
+        key_metadata_atime = key.get_metadata('x-amz-metadata-atime')
+        key_final_path = key_full_path
         try:
             if filename.endswith('.lzo'):
                 uncompressed_key_full_path = re.sub('\.lzo$', '', key_full_path)
@@ -234,11 +236,16 @@ class RestoreWorker(object):
                 key.close()
                 out, err = lzop_pipe.communicate()
                 errcode = lzop_pipe.returncode
+                key_final_path = uncompressed_key_full_path
                 if errcode != 0:
                     logging.error("lzop Out: %s\nError:%s\nExit Code %d: " % (out, err, errcode))
             else:
                 logging.info("Downloading %s..." % key_full_path)
                 key.get_contents_to_filename(key_full_path)
+
+            # Setting original timestamps from original filesystem
+            os.utime(key_final_path, (key_metadata_atime, key_metadata_mtime))
+
         except Exception as e:
             logging.error('Unable to create "{!s}": {!s}'.format(
                 key_full_path, e))
