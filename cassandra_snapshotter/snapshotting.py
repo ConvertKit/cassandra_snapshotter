@@ -219,12 +219,18 @@ class RestoreWorker(object):
         # We don't want any host prefix because we restore from only one host
         if self.local_restore:
             prefix = ''
-            
+
         filename = "{}/{}/{}{}".format(keyspace, table, prefix, file)
         key_full_path = os.path.join(self.restore_dir, filename)
-        key_metadata_mtime = key.get_metadata('x-amz-metadata-mtime')
-        key_metadata_atime = key.get_metadata('x-amz-metadata-atime')
+        bucket = self.s3connection.get_bucket(
+            self.snapshot.s3_bucket, validate=False)
+        key_object =  bucket.get_key(key.name)
         key_final_path = key_full_path
+        key_metadata_mtime = key_object.get_metadata('mtime')
+        key_metadata_atime = key_object.get_metadata('atime')
+        if key_metadata_mtime is not None and key_metadata_atime is not None:
+            key_mtime = int(float(key_metadata_mtime))
+            key_atime = int(float(key_metadata_atime))
         try:
             if filename.endswith('.lzo'):
                 uncompressed_key_full_path = re.sub('\.lzo$', '', key_full_path)
@@ -244,7 +250,8 @@ class RestoreWorker(object):
                 key.get_contents_to_filename(key_full_path)
 
             # Setting original timestamps from original filesystem
-            os.utime(key_final_path, (key_metadata_atime, key_metadata_mtime))
+            logging.info("Changing atime %s and mtime %s for %s..." % (key_metadata_atime, key_metadata_mtime, key_final_path))
+            os.utime(key_final_path, (key_atime, key_mtime))
 
         except Exception as e:
             logging.error('Unable to create "{!s}": {!s}'.format(
