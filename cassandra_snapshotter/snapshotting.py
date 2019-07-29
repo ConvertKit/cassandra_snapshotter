@@ -16,7 +16,7 @@ from datetime import datetime
 from fabric.api import (env, execute, hide, run, sudo)
 from fabric.context_managers import settings
 from multiprocessing.dummy import Pool
-from cassandra_snapshotter.utils import decompression_pipe
+from cassandra_snapshotter.utils import check_lzop, decompression_pipe
 
 
 class Snapshot(object):
@@ -76,7 +76,7 @@ class Snapshot(object):
 
     @property
     def base_path(self):
-        return '/'.join([self._base_path, self.name])
+        return os.path.join(self._base_path, self.name)
 
     def make_snapshot_name(self):
         return datetime.utcnow().strftime(self.SNAPSHOT_TIMESTAMP_FORMAT)
@@ -95,32 +95,52 @@ class Snapshot(object):
 
 
 class RestoreWorker(object):
-    def __init__(self, aws_access_key_id, aws_secret_access_key, snapshot, cassandra_bin_dir, cassandra_data_dir):
+    def __init__(self, aws_access_key_id, aws_secret_access_key, snapshot,
+                 cassandra_bin_dir, restore_dir, no_sstableloader,
+                 local_restore, s3_connection_host):
         self.aws_secret_access_key = aws_secret_access_key
         self.aws_access_key_id = aws_access_key_id
+        self.s3_connection_host = s3_connection_host
         self.s3connection = S3Connection(
             aws_access_key_id=self.aws_access_key_id,
-            aws_secret_access_key=self.aws_secret_access_key)
+            aws_secret_access_key=self.aws_secret_access_key,
+            host=self.s3_connection_host)
         self.snapshot = snapshot
         self.keyspace_table_matcher = None
         self.cassandra_bin_dir = cassandra_bin_dir
-        self.cassandra_data_dir = cassandra_data_dir
+        self.restore_dir = restore_dir
+        self.run_sstableloader = not no_sstableloader
+        self.local_restore = local_restore
 
     def restore(self, keyspace, table, hosts, target_hosts):
-        # TODO:
-        # 4. sstableloader
+        table_log = "table: %s" % table if table else ''
+        snap_name = os.path.basename(self.snapshot.base_path)
+        logging.info("Restoring keyspace: %(keyspace)s %(table)s "
+                     "from backup %(snap)s" %
+                     dict(keyspace=keyspace, table=table_log, snap=snap_name))
+        check_lzop()
 
-        logging.info("Restoring keyspace=%(keyspace)s,\
-            table=%(table)s" % dict(keyspace=keyspace, table=table))
-        logging.info("From hosts: %(hosts)s to: %(target_hosts)s" % dict(
-            hosts=', '.join(hosts), target_hosts=', '.join(target_hosts)))
+        if self.local_restore:
+            logging.info("Backup files of %(host)s will be downloaded "
+                         "in '%(dir)s'." %
+                         dict(host=hosts[0], dir=self.restore_dir))
+        else:
+            logging.info("Backup files of the following host(s) will be "
+                         "downloaded in '%(dir)s': %(hosts)s." %
+                         dict(dir=self.restore_dir, hosts=', '.join(hosts)))
+
+            if self.run_sstableloader:
+                logging.info("After the downloading data will be streamed "
+                             "to the following host(s) via sstableloader: %s." %
+                             ', '.join(target_hosts))
         if not table:
             table = ".*?"
 
         bucket = self.s3connection.get_bucket(
             self.snapshot.s3_bucket, validate=False)
 
-        matcher_string = "(%(hosts)s).*/(%(keyspace)s)/(%(table)s-[A-Za-z0-9]*)/" % dict(
+        # handle v2.0 and v2.1 table directory format
+        matcher_string = "(%(hosts)s).*/(%(keyspace)s)/(%(table)s-?[A-Za-z0-9]*)/" % dict(
             hosts='|'.join(hosts), keyspace=keyspace, table=table)
         self.keyspace_table_matcher = re.compile(matcher_string)
 
@@ -135,22 +155,22 @@ class RestoreWorker(object):
             tables.add(r.group(3))
             keys.append(k)
 
-        keyspace_path = "/".join([self.cassandra_data_dir, "data", keyspace])
+        keyspace_path = os.path.join(self.restore_dir, keyspace)
         self._delete_old_dir_and_create_new(keyspace_path, tables)
         total_size = reduce(lambda s, k: s + k.size, keys, 0)
 
-        logging.info("Found %(files_count)d files, with total size \
-            of %(size)s." % dict(files_count=len(keys),
-                                 size=self._human_size(total_size)))
-        print("Found %(files_count)d files, with total size \
-            of %(size)s." % dict(files_count=len(keys),
-                                 size=self._human_size(total_size)))
+        logging.info("Found %(files_count)d files, with total size of %(size)s."
+                     % dict(files_count=len(keys),
+                            size=self._human_size(total_size)))
+        print("Found %(files_count)d files, with total size of %(size)s." %
+              dict(files_count=len(keys), size=self._human_size(total_size)))
 
         self._download_keys(keys, total_size)
 
-        logging.info("Finished downloading...")
-
-        self._run_sstableloader(keyspace_path, tables, target_hosts, self.cassandra_bin_dir)
+        if target_hosts and self.run_sstableloader:
+            self._run_sstableloader(keyspace_path, tables, target_hosts,
+                                    self.cassandra_bin_dir)
+        logging.info("Restore completed.")
 
     def _delete_old_dir_and_create_new(self, keyspace_path, tables):
 
@@ -160,7 +180,7 @@ class RestoreWorker(object):
             shutil.rmtree(keyspace_path)
 
         for table in tables:
-            path = "./{!s}/{!s}".format(keyspace_path, table)
+            path = "{!s}/{!s}".format(keyspace_path, table)
             if not os.path.exists(path):
                 os.makedirs(path)
 
@@ -186,26 +206,56 @@ class RestoreWorker(object):
             progress_string = "{!s}{!s}\r".format(progress_string, padding)
 
             sys.stderr.write(progress_string)
+        logging.info("Download finished.")
 
     def _download_key(self, key):
         r = self.keyspace_table_matcher.search(key.name)
-        filename = "./{!s}/{!s}/{!s}_{!s}".format(
-            r.group(2), r.group(3),
-            key.name.split('/')[2], key.name.split('/')[-1])
+        keyspace = r.group(2)
+        table = r.group(3)
+        host = key.name.split('/')[2]
+        file = key.name.split('/')[-1]
+        prefix = '%s_' % host
 
-        if filename.endswith('.lzo'):
-            filename = re.sub('\.lzo$', '', filename)
-            lzop_pipe = decompression_pipe(filename)
-            key.open_read()
-            for chunk in key:
-                lzop_pipe.stdin.write(chunk)
-            key.close()
-            out, err = lzop_pipe.communicate()
-            errcode = lzop_pipe.returncode
-            if errcode != 0:
-                logging.exception("lzop Out: %s\nError:%s\nExit Code %d: " % (out, err, errcode))
-        else:
-            key.get_contents_to_filename(filename)
+        # We don't want any host prefix because we restore from only one host
+        if self.local_restore:
+            prefix = ''
+
+        filename = "{}/{}/{}{}".format(keyspace, table, prefix, file)
+        key_full_path = os.path.join(self.restore_dir, filename)
+        bucket = self.s3connection.get_bucket(
+            self.snapshot.s3_bucket, validate=False)
+        key_object = bucket.get_key(key.name)
+        key_final_path = key_full_path
+        key_metadata_mtime = key_object.get_metadata('mtime')
+        key_metadata_atime = key_object.get_metadata('atime')
+        if key_metadata_mtime is not None and key_metadata_atime is not None:
+            key_mtime = int(float(key_metadata_mtime))
+            key_atime = int(float(key_metadata_atime))
+        try:
+            if filename.endswith('.lzo'):
+                uncompressed_key_full_path = re.sub('\.lzo$', '', key_full_path)
+                logging.info("Decompressing %s..." % key_full_path)
+                lzop_pipe = decompression_pipe(uncompressed_key_full_path)
+                key.open_read()
+                for chunk in key:
+                    lzop_pipe.stdin.write(chunk)
+                key.close()
+                out, err = lzop_pipe.communicate()
+                errcode = lzop_pipe.returncode
+                key_final_path = uncompressed_key_full_path
+                if errcode != 0:
+                    logging.error("lzop Out: %s\nError:%s\nExit Code %d: " % (out, err, errcode))
+            else:
+                logging.info("Downloading %s..." % key_full_path)
+                key.get_contents_to_filename(key_full_path)
+
+            # Setting original timestamps from original filesystem
+            logging.info("Changing atime %s and mtime %s for %s..." % (key_metadata_atime, key_metadata_mtime, key_final_path))
+            os.utime(key_final_path, (key_atime, key_mtime))
+
+        except Exception as e:
+            logging.error('Unable to create "{!s}": {!s}'.format(
+                key_full_path, e))
 
         return key.size
 
@@ -217,9 +267,10 @@ class RestoreWorker(object):
         return "{:3.1f}{!s}".format(size, 'TB')
 
     def _run_sstableloader(self, keyspace_path, tables, target_hosts, cassandra_bin_dir):
+        logging.info("Running sstableloader...")
         sstableloader = "{!s}/sstableloader".format(cassandra_bin_dir)
         for table in tables:
-            path = "/".join([keyspace_path, table])
+            path = os.path.join(keyspace_path, table)
             if not os.path.exists(path):
                 os.makedirs(path)
             command = '%(sstableloader)s --nodes %(hosts)s -v \
@@ -280,7 +331,7 @@ class BackupWorker(object):
         return env.host_string
 
     def upload_node_backups(self, snapshot, incremental_backups):
-        prefix = '/'.join(snapshot.base_path.split('/') + [self.get_current_node_hostname()])
+        prefix = os.path.join(snapshot.base_path, self.get_current_node_hostname())
 
         manifest_path = '/tmp/backupmanifest'
         manifest_command = "cassandra-snapshotter-agent " \
@@ -407,7 +458,7 @@ class BackupWorker(object):
     def write_ring_description(self, snapshot):
         logging.info("Writing ring description")
         content = self.get_ring_description()
-        ring_path = '/'.join([snapshot.base_path, 'ring'])
+        ring_path = os.path.join(snapshot.base_path, 'ring')
         self.write_on_S3(snapshot.s3_bucket, ring_path, content)
 
     def write_schema(self, snapshot):
@@ -415,18 +466,18 @@ class BackupWorker(object):
             for ks in snapshot.keyspaces:
                 logging.info("Writing schema for keyspace {!s}".format(ks))
                 content = self.get_keyspace_schema(ks)
-                schema_path = '/'.join(
-                    [snapshot.base_path, "schema_{!s}.cql".format(ks)])
+                schema_path = os.path.join(
+                    snapshot.base_path, "schema_{!s}.cql".format(ks))
                 self.write_on_S3(snapshot.s3_bucket, schema_path, content)
         else:
             logging.info("Writing schema for all keyspaces")
             content = self.get_keyspace_schema()
-            schema_path = '/'.join([snapshot.base_path, "schema.cql"])
+            schema_path = os.path.join(snapshot.base_path, "schema.cql")
             self.write_on_S3(snapshot.s3_bucket, schema_path, content)
 
     def write_snapshot_manifest(self, snapshot):
         content = snapshot.dump_manifest_file()
-        manifest_path = '/'.join([snapshot.base_path, 'manifest.json'])
+        manifest_path = os.path.join(snapshot.base_path, 'manifest.json')
         self.write_on_S3(snapshot.s3_bucket, manifest_path, content)
 
     def start_cluster_backup(self, snapshot, incremental_backups=False):
@@ -539,7 +590,7 @@ class SnapshotCollection(object):
         snap_paths = [x for x in snap_paths if x != prefix]
         for snap_path in snap_paths:
             mkey = Key(bucket)
-            manifest_path = '/'.join([snap_path, 'manifest.json'])
+            manifest_path = os.path.join(snap_path, 'manifest.json')
             mkey.key = manifest_path
             try:
                 manifest_data = mkey.get_contents_as_string()
