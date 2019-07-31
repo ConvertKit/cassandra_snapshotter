@@ -9,9 +9,11 @@ import json
 import shutil
 import logging
 from distutils.util import strtobool
-from boto.s3.connection import S3Connection
-from boto.s3.key import Key
-from boto.exception import S3ResponseError
+
+import boto3
+from botocore.exceptions import ClientError
+from functools import reduce
+
 from datetime import datetime
 from fabric.api import (env, execute, hide, run, sudo)
 from fabric.context_managers import settings
@@ -97,20 +99,21 @@ class Snapshot(object):
 class RestoreWorker(object):
     def __init__(self, aws_access_key_id, aws_secret_access_key, snapshot,
                  cassandra_bin_dir, restore_dir, no_sstableloader,
-                 local_restore, s3_connection_host):
+                 local_restore, s3_bucket_region, s3_bucket_name):
         self.aws_secret_access_key = aws_secret_access_key
         self.aws_access_key_id = aws_access_key_id
-        self.s3_connection_host = s3_connection_host
-        self.s3connection = S3Connection(
-            aws_access_key_id=self.aws_access_key_id,
-            aws_secret_access_key=self.aws_secret_access_key,
-            host=self.s3_connection_host)
+        self.s3_bucket_region = s3_bucket_region
+        self.bucket =  boto3.client('s3', 
+                      aws_access_key_id=self.aws_access_key_id, 
+                      aws_secret_access_key=self.aws_secret_access_key, 
+                      region_name=self.s3_bucket_region)
         self.snapshot = snapshot
         self.keyspace_table_matcher = None
         self.cassandra_bin_dir = cassandra_bin_dir
         self.restore_dir = restore_dir
         self.run_sstableloader = not no_sstableloader
         self.local_restore = local_restore
+        self.s3_bucket_name = s3_bucket_name
 
     def restore(self, keyspace, table, hosts, target_hosts):
         table_log = "table: %s" % table if table else ''
@@ -136,9 +139,6 @@ class RestoreWorker(object):
         if not table:
             table = ".*?"
 
-        bucket = self.s3connection.get_bucket(
-            self.snapshot.s3_bucket, validate=False)
-
         # handle v2.0 and v2.1 table directory format
         matcher_string = "(%(hosts)s).*/(%(keyspace)s)/(%(table)s-?[A-Za-z0-9]*)/" % dict(
             hosts='|'.join(hosts), keyspace=keyspace, table=table)
@@ -147,8 +147,13 @@ class RestoreWorker(object):
         keys = []
         tables = set()
 
-        for k in bucket.list(self.snapshot.base_path):
-            r = self.keyspace_table_matcher.search(k.name)
+        bucket = boto3.client('s3', 
+            aws_access_key_id=self.aws_access_key_id, 
+            aws_secret_access_key=self.aws_secret_access_key, 
+            region_name=self.s3_bucket_region
+        )
+        for k in bucket.objects.all():
+            r = self.keyspace_table_matcher.search(k.key)
             if not r:
                 continue
 
@@ -209,11 +214,11 @@ class RestoreWorker(object):
         logging.info("Download finished.")
 
     def _download_key(self, key):
-        r = self.keyspace_table_matcher.search(key.name)
+        r = self.keyspace_table_matcher.search(key.key)
         keyspace = r.group(2)
         table = r.group(3)
-        host = key.name.split('/')[2]
-        file = key.name.split('/')[-1]
+        host = key.key.split('/')[2]
+        file = key.key.split('/')[-1]
         prefix = '%s_' % host
 
         # We don't want any host prefix because we restore from only one host
@@ -222,12 +227,10 @@ class RestoreWorker(object):
 
         filename = "{}/{}/{}{}".format(keyspace, table, prefix, file)
         key_full_path = os.path.join(self.restore_dir, filename)
-        bucket = self.s3connection.get_bucket(
-            self.snapshot.s3_bucket, validate=False)
-        key_object = bucket.get_key(key.name)
+        key_object = key.get()
         key_final_path = key_full_path
-        key_metadata_mtime = key_object.get_metadata('mtime')
-        key_metadata_atime = key_object.get_metadata('atime')
+        key_metadata_mtime = key_object['Metadata']['mtime']
+        key_metadata_atime = key_object['Metadata']['atime']
         if key_metadata_mtime is not None and key_metadata_atime is not None:
             key_mtime = int(float(key_metadata_mtime))
             key_atime = int(float(key_metadata_atime))
@@ -236,10 +239,9 @@ class RestoreWorker(object):
                 uncompressed_key_full_path = re.sub('\.lzo$', '', key_full_path)
                 logging.info("Decompressing %s..." % key_full_path)
                 lzop_pipe = decompression_pipe(uncompressed_key_full_path)
-                key.open_read()
-                for chunk in key:
+                key_body = key_object['Body']
+                for chunk in iter(lambda: key_body.read(), b''):
                     lzop_pipe.stdin.write(chunk)
-                key.close()
                 out, err = lzop_pipe.communicate()
                 errcode = lzop_pipe.returncode
                 key_final_path = uncompressed_key_full_path
@@ -247,7 +249,12 @@ class RestoreWorker(object):
                     logging.error("lzop Out: %s\nError:%s\nExit Code %d: " % (out, err, errcode))
             else:
                 logging.info("Downloading %s..." % key_full_path)
-                key.get_contents_to_filename(key_full_path)
+                bucket = boto3.client('s3', 
+                    aws_access_key_id=self.aws_access_key_id, 
+                    aws_secret_access_key=self.aws_secret_access_key, 
+                    region_name=self.s3_bucket_region
+                )
+                bucket.download_file(self.s3_bucket_name,key.key,key_full_path)
 
             # Setting original timestamps from original filesystem
             logging.info("Changing atime %s and mtime %s for %s..." % (key_metadata_atime, key_metadata_mtime, key_final_path))
@@ -304,7 +311,7 @@ class BackupWorker(object):
                  s3_connection_host, cassandra_conf_path, use_sudo,
                  nodetool_path, cassandra_bin_dir, cqlsh_user, cqlsh_password,
                  backup_schema, buffer_size, exclude_tables, rate_limit, quiet,
-                 connection_pool_size=12, reduced_redundancy=False):
+                 connection_pool_size=12):
         self.aws_secret_access_key = aws_secret_access_key
         self.aws_access_key_id = aws_access_key_id
         self.s3_bucket_region = s3_bucket_region
@@ -318,7 +325,6 @@ class BackupWorker(object):
         self.backup_schema = backup_schema
         self.connection_pool_size = connection_pool_size
         self.buffer_size = buffer_size
-        self.reduced_redundancy = reduced_redundancy
         self.rate_limit = rate_limit
         self.quiet = quiet
         if isinstance(use_sudo, basestring):
@@ -364,9 +370,6 @@ class BackupWorker(object):
                          "--manifest=%(manifest)s " \
                          "--bufsize=%(bufsize)s " \
                          "--concurrency=4"
-
-        if self.reduced_redundancy:
-            upload_command += " --reduced-redundancy"
 
         if self.rate_limit > 0:
             upload_command += " --rate-limit=%(rate_limit)s"
@@ -447,13 +450,12 @@ class BackupWorker(object):
         return output
 
     def write_on_S3(self, bucket_name, path, content):
-        conn = S3Connection(
-            self.aws_access_key_id,
-            self.aws_secret_access_key,
-            host=self.s3_connection_host)
-        bucket = conn.get_bucket(bucket_name, validate=False)
-        key = bucket.new_key(path)
-        key.set_contents_from_string(content)
+        bucket = boto3.client('s3', 
+                      aws_access_key_id=self.aws_access_key_id, 
+                      aws_secret_access_key=self.aws_secret_access_key, 
+                      region_name=self.s3_bucket_region
+                      )
+        bucket.put_object(Bucket=bucket_name, Key=path, Body=content)
 
     def write_ring_description(self, snapshot):
         logging.info("Writing ring description")
@@ -566,8 +568,8 @@ class BackupWorker(object):
 class SnapshotCollection(object):
     def __init__(
             self, aws_access_key_id,
-            aws_secret_access_key, base_path, s3_bucket, s3_connection_host):
-        self.s3_connection_host = s3_connection_host
+            aws_secret_access_key, base_path, s3_bucket, s3_bucket_region):
+        self.s3_bucket_region = s3_bucket_region
         self.s3_bucket = s3_bucket
         self.base_path = base_path
         self.snapshots = None
@@ -578,25 +580,28 @@ class SnapshotCollection(object):
         if self.snapshots:
             return
 
-        conn = S3Connection(self.aws_access_key_id, self.aws_secret_access_key, host=self.s3_connection_host)
-        bucket = conn.get_bucket(self.s3_bucket, validate=False)
+        bucket = boto3.client('s3', 
+            aws_access_key_id=self.aws_access_key_id, 
+            aws_secret_access_key=self.aws_secret_access_key, 
+            region_name=self.s3_bucket_region
+        )
         self.snapshots = []
         prefix = self.base_path
         if not self.base_path.endswith('/'):
             prefix = "{!s}/".format(self.base_path)
-        snap_paths = [snap.name for snap in bucket.list(
-            prefix=prefix, delimiter='/')]
+        snap_paths = [snap.name for snap in bucket.list_objects(
+            Bucket=self.s3_bucket,Prefix=prefix, Delimiter='/')['Contents']]
         # Remove the root dir from the list since it won't have a manifest file.
         snap_paths = [x for x in snap_paths if x != prefix]
         for snap_path in snap_paths:
-            mkey = Key(bucket)
             manifest_path = os.path.join(snap_path, 'manifest.json')
-            mkey.key = manifest_path
+            mkey = manifest_path
             try:
-                manifest_data = mkey.get_contents_as_string()
-            except S3ResponseError as e:  # manifest.json not found.
+                obj = bucket.get_object(Bucket=self.s3_bucket,Key=mkey)
+                manifest_data = json.loads(obj['Body'].read())
+            except ClientError as e:  # manifest.json not found.
                 logging.warn("Response: {!r} manifest_path: {!r}".format(
-                    e.message, manifest_path))
+                    e.response['Error']['Message'], manifest_path))
                 continue
             try:
                 self.snapshots.append(

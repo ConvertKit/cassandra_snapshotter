@@ -1,3 +1,11 @@
+1.2.0
+ * Add support for boto3
+ * Add support to upload objects on S3 with a custom storage class 
+
+1.1.0
+ * Add file timestamps attributes to S3 object metadata on each sstable
+ * Improved restoration process
+
 1.0.1
  * add support for cn-north-1 region
  * add support for password authentication 
