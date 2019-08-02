@@ -114,6 +114,8 @@ class RestoreWorker(object):
         self.run_sstableloader = not no_sstableloader
         self.local_restore = local_restore
         self.s3_bucket_name = s3_bucket_name
+        self.boto_session = boto3.Session(region_name = self.s3_bucket_region,
+                aws_access_key_id = aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
 
     def restore(self, keyspace, table, hosts, target_hosts):
         table_log = "table: %s" % table if table else ''
@@ -147,11 +149,9 @@ class RestoreWorker(object):
         keys = []
         tables = set()
 
-        bucket = boto3.client('s3', 
-            aws_access_key_id=self.aws_access_key_id, 
-            aws_secret_access_key=self.aws_secret_access_key, 
-            region_name=self.s3_bucket_region
-        )
+        s3 = self.boto_session.resource('s3')
+        bucket = s3.Bucket(self.s3_bucket_name)
+
         for k in bucket.objects.all():
             r = self.keyspace_table_matcher.search(k.key)
             if not r:
@@ -326,6 +326,7 @@ class BackupWorker(object):
         self.buffer_size = buffer_size
         self.rate_limit = rate_limit
         self.quiet = quiet
+        
         if isinstance(use_sudo, basestring):
             self.use_sudo = bool(strtobool(use_sudo))
         else:
