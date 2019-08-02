@@ -307,16 +307,15 @@ class BackupWorker(object):
     """
 
     def __init__(self, aws_secret_access_key,
-                 aws_access_key_id, s3_bucket_region, s3_ssenc,
-                 s3_connection_host, cassandra_conf_path, use_sudo,
-                 nodetool_path, cassandra_bin_dir, cqlsh_user, cqlsh_password,
+                 aws_access_key_id, s3_bucket_region, s3_ssenc, 
+                 cassandra_conf_path, use_sudo, nodetool_path, 
+                 cassandra_bin_dir, cqlsh_user, cqlsh_password,
                  backup_schema, buffer_size, exclude_tables, rate_limit, quiet,
                  connection_pool_size=12):
         self.aws_secret_access_key = aws_secret_access_key
         self.aws_access_key_id = aws_access_key_id
         self.s3_bucket_region = s3_bucket_region
         self.s3_ssenc = s3_ssenc
-        self.s3_connection_host = s3_connection_host
         self.cassandra_conf_path = cassandra_conf_path
         self.nodetool_path = nodetool_path or "{!s}/nodetool".format(cassandra_bin_dir)
         self.cqlsh_path = "{!s}/cqlsh".format(cassandra_bin_dir)
@@ -589,8 +588,9 @@ class SnapshotCollection(object):
         prefix = self.base_path
         if not self.base_path.endswith('/'):
             prefix = "{!s}/".format(self.base_path)
-        snap_paths = [snap.name for snap in bucket.list_objects(
-            Bucket=self.s3_bucket,Prefix=prefix, Delimiter='/')['Contents']]
+        s3_result = bucket.list_objects_v2( Bucket=self.s3_bucket,
+                Prefix=prefix, Delimiter='/')
+        snap_paths = [snap.get('Prefix') for snap in s3_result.get('CommonPrefixes') ]
         # Remove the root dir from the list since it won't have a manifest file.
         snap_paths = [x for x in snap_paths if x != prefix]
         for snap_path in snap_paths:
@@ -598,7 +598,8 @@ class SnapshotCollection(object):
             mkey = manifest_path
             try:
                 obj = bucket.get_object(Bucket=self.s3_bucket,Key=mkey)
-                manifest_data = json.loads(obj['Body'].read())
+                manifest_raw = obj['Body'].read().decode()
+                manifest_data = json.loads(json.dumps(manifest_raw))
             except ClientError as e:  # manifest.json not found.
                 logging.warn("Response: {!r} manifest_path: {!r}".format(
                     e.response['Error']['Message'], manifest_path))
