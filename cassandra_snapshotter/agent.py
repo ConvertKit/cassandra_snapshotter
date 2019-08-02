@@ -147,7 +147,7 @@ def put_from_manifest(
     files = manifest_fp.read().splitlines()
     pool = Pool(concurrency)
     for f in pool.imap(upload_file,
-                       ((s3_bucket, s3_bucket_region,f, destination_path(s3_base_path, f), s3_ssenc, buffer_size, rate_limit, quiet)
+                       ((s3_bucket, aws_access_key_id, aws_secret_access_key, s3_bucket_region,f, destination_path(s3_base_path, f), s3_ssenc, buffer_size, rate_limit, quiet)
                         for f in files if f)):
         if f is None:
             # Upload failed.
