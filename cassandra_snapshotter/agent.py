@@ -83,7 +83,7 @@ def upload_file(s3_bucket, aws_access_key_id, aws_secret_access_key, s3_bucket_r
                         logger=logger,
                         aws_access_key_id=aws_access_key_id,
                         aws_secret_access_key=aws_secret_access_key,
-                        metadata={'modified': file_mtime, 'mtime': mtime_epoch, 'atime': atime_epoch, 'ctime': ctime_epoch}
+                        metadata={'modified': str(file_mtime), 'mtime': str(mtime_epoch), 'atime': str(atime_epoch), 'ctime': str(ctime_epoch)}
                     )
                     mpu_id = mp.create()
                     logger.info("Initialized multipart upload for file {!s} to {!s}".format(source, destination))
