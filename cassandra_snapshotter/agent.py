@@ -100,7 +100,8 @@ def upload_file(s3_bucket, aws_access_key_id, aws_secret_access_key, s3_bucket_r
                 raise
 
             try:
-                print(mp.complete(mpu_id, parts))
+                result=mp.complete(mpu_id, parts)
+                logger.info("Finished multipart upload for file {!s} to {!s}".format(source,result['Key']))
             except Exception as exc:
                 logger.error("Error completing multipart file upload for file {!s} to {!s}".format(source, destination))
                 logger.error(exc.message)

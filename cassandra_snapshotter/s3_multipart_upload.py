@@ -28,9 +28,9 @@ class S3MultipartUpload(object):
     self.part_bytes = part_size
     self.region=region_name
     self.metadata=metadata
-    assert part_size > self.PART_MINIMUM
-    assert (self.total_bytes % part_size == 0
-            or self.total_bytes % part_size > self.PART_MINIMUM)
+    #assert part_size > self.PART_MINIMUM
+    #assert (self.total_bytes % part_size == 0
+    #        or self.total_bytes % part_size > self.PART_MINIMUM)
     self.s3 = boto3.session.Session(
         region_name=region_name,aws_access_key_id=aws_access_key_id,aws_secret_access_key=aws_secret_access_key).client("s3")
     if verbose:
@@ -59,13 +59,14 @@ class S3MultipartUpload(object):
     parts = []
     uploaded_bytes = 0
     for i, chunk in enumerate(compressed_pipe(self.path, bufsize, rate_limit, quiet)):
+        i+=1
         part = self.s3.upload_part(
             Body=chunk, Bucket=self.bucket, Key=self.key, UploadId=mpu_id, PartNumber=i)
         parts.append({"PartNumber": i, "ETag": part["ETag"]})
-        uploaded_bytes += len(chunk)
-        self.logger.info("{0} of {1} uploaded ({2:.3f}%)".format(
-            uploaded_bytes, self.total_bytes,
-            as_percent(uploaded_bytes, self.total_bytes)))
+        #uploaded_bytes += bufsize
+        #self.logger.info("{0} of {1} uploaded ({2:.3f}%)".format(
+        #    uploaded_bytes, self.total_bytes,
+        #    as_percent(uploaded_bytes, self.total_bytes)))
     return parts
 
   def complete(self, mpu_id, parts):
