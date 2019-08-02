@@ -53,7 +53,7 @@ def get_bucket(
 
 def destination_path(s3_base_path, file_path, compressed=True):
     suffix = compressed and '.lzo' or ''
-    return s3_base_path + file_path + suffix])
+    return s3_base_path + file_path + suffix
 
 
 def s3_progress_update_callback(*args):
