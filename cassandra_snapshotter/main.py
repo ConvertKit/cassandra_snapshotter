@@ -64,6 +64,7 @@ def run_backup(args):
         connection_pool_size=args.connection_pool_size,
         exclude_tables=args.exclude_tables,
         rate_limit=args.rate_limit,
+        storage_class=args.storage_class,
         quiet=args.quiet
     )
 
@@ -250,6 +251,11 @@ def main():
         '--connection-pool-size',
         default=12,
         help="Number of simultaneous connections to cassandra nodes")
+
+    backup_parser.add_argument(
+        '--storage-class',
+        default='STANDARD',
+        help="S3 storage class used to store objects")
 
     backup_parser.add_argument(
         '--rate-limit',

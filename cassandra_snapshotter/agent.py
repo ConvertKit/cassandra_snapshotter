@@ -62,7 +62,7 @@ def s3_progress_update_callback(*args):
 
 
 @map_wrap
-def upload_file(s3_bucket, aws_access_key_id, aws_secret_access_key, s3_bucket_region, source, destination, s3_ssenc, bufsize, rate_limit, quiet):
+def upload_file(s3_bucket, aws_access_key_id, aws_secret_access_key, s3_bucket_region, source, destination, s3_ssenc, bufsize, rate_limit, storage_class, quiet):
     mp = None
     retry_count = 0
     sleep_time = SLEEP_TIME
@@ -83,7 +83,8 @@ def upload_file(s3_bucket, aws_access_key_id, aws_secret_access_key, s3_bucket_r
                         logger=logger,
                         aws_access_key_id=aws_access_key_id,
                         aws_secret_access_key=aws_secret_access_key,
-                        metadata={'modified': str(file_mtime), 'mtime': str(mtime_epoch), 'atime': str(atime_epoch), 'ctime': str(ctime_epoch)}
+                        metadata={'modified': str(file_mtime), 'mtime': str(mtime_epoch), 'atime': str(atime_epoch), 'ctime': str(ctime_epoch)},
+                        storage_class=storage_class
                     )
                     mpu_id = mp.create()
                     logger.info("Initialized multipart upload for file {!s} to {!s}".format(source, destination))
@@ -135,7 +136,7 @@ def upload_chunk(mp, chunk, index):
 def put_from_manifest(
         s3_bucket, s3_bucket_region, s3_ssenc, s3_base_path,
         aws_access_key_id, aws_secret_access_key, manifest,
-        bufsize, rate_limit, quiet,
+        bufsize, rate_limit, storage_class, quiet,
         concurrency=None, incremental_backups=False):
     """
     Uploads files listed in a manifest to amazon S3
@@ -148,7 +149,7 @@ def put_from_manifest(
     files = manifest_fp.read().splitlines()
     pool = Pool(concurrency)
     for f in pool.imap(upload_file,
-                       ((s3_bucket, aws_access_key_id, aws_secret_access_key, s3_bucket_region,f, destination_path(s3_base_path, f), s3_ssenc, buffer_size, rate_limit, quiet)
+                       ((s3_bucket, aws_access_key_id, aws_secret_access_key, s3_bucket_region,f, destination_path(s3_base_path, f), s3_ssenc, buffer_size, rate_limit, storage_class, quiet)
                         for f in files if f)):
         if f is None:
             # Upload failed.
@@ -299,6 +300,7 @@ def main():
             args.manifest,
             args.bufsize,
             args.rate_limit,
+            args.storage_class,
             args.quiet,
             args.concurrency,
             args.incremental_backups

@@ -16,6 +16,7 @@ class S3MultipartUpload(object):
                logger,
                aws_access_key_id, 
                aws_secret_access_key,
+               storage_class,
                part_size=int(15e6),
                region_name="us-east-1",
                metadata={},
@@ -26,8 +27,9 @@ class S3MultipartUpload(object):
     self.logger=logger
     self.total_bytes = os.stat(local_path).st_size
     self.part_bytes = part_size
-    self.region=region_name
-    self.metadata=metadata
+    self.region = region_name
+    self.metadata = metadata
+    self.storage_class = storage_class
     #assert part_size > self.PART_MINIMUM
     #assert (self.total_bytes % part_size == 0
     #        or self.total_bytes % part_size > self.PART_MINIMUM)
@@ -51,7 +53,7 @@ class S3MultipartUpload(object):
     return aborted
 
   def create(self):
-    mpu = self.s3.create_multipart_upload(Bucket=self.bucket, Key=self.key, Metadata=self.metadata)
+    mpu = self.s3.create_multipart_upload(Bucket=self.bucket, Key=self.key, Metadata=self.metadata, StorageClass=self.storage_class)
     mpu_id = mpu["UploadId"]
     return mpu_id
 

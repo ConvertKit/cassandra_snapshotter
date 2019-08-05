@@ -307,7 +307,7 @@ class BackupWorker(object):
                  cassandra_conf_path, use_sudo, nodetool_path, 
                  cassandra_bin_dir, cqlsh_user, cqlsh_password,
                  backup_schema, buffer_size, exclude_tables, rate_limit, quiet,
-                 connection_pool_size=12):
+                 storage_class,connection_pool_size=12):
         self.aws_secret_access_key = aws_secret_access_key
         self.aws_access_key_id = aws_access_key_id
         self.s3_bucket_region = s3_bucket_region
@@ -321,6 +321,7 @@ class BackupWorker(object):
         self.connection_pool_size = connection_pool_size
         self.buffer_size = buffer_size
         self.rate_limit = rate_limit
+        self.storage_class = storage_class
         self.quiet = quiet
         
         if isinstance(use_sudo, basestring):
@@ -365,6 +366,7 @@ class BackupWorker(object):
                          "--s3-base-path=%(prefix)s " \
                          "--manifest=%(manifest)s " \
                          "--bufsize=%(bufsize)s " \
+                         "--storage-class=%(storage_class)s" \    
                          "--concurrency=4"
 
         if self.rate_limit > 0:
@@ -387,6 +389,7 @@ class BackupWorker(object):
             manifest=manifest_path,
             bufsize=self.buffer_size,
             rate_limit=self.rate_limit,
+            storage_class=self.storage_class,
             incremental_backups=incremental_backups and '--incremental_backups' or ''
         )
         if self.use_sudo:

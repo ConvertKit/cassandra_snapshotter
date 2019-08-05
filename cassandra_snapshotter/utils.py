@@ -61,6 +61,10 @@ def add_s3_arguments(arg_parser):
                             required=True,
                             help="S3 base path for backups.")
 
+    arg_parser.add_argument('--storage-class',
+                            default='STANDARD',
+                            help="S3 storage class to store objects.")
+
     return arg_parser
 
 
