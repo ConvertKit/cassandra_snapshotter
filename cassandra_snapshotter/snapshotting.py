@@ -103,10 +103,6 @@ class RestoreWorker(object):
         self.aws_secret_access_key = aws_secret_access_key
         self.aws_access_key_id = aws_access_key_id
         self.s3_bucket_region = s3_bucket_region
-        self.bucket =  boto3.client('s3', 
-                      aws_access_key_id=self.aws_access_key_id, 
-                      aws_secret_access_key=self.aws_secret_access_key, 
-                      region_name=self.s3_bucket_region)
         self.snapshot = snapshot
         self.keyspace_table_matcher = None
         self.cassandra_bin_dir = cassandra_bin_dir
@@ -152,7 +148,7 @@ class RestoreWorker(object):
         s3 = self.boto_session.resource('s3')
         bucket = s3.Bucket(self.s3_bucket_name)
 
-        for k in bucket.objects.all():
+        for k in bucket.objects.filter(Prefix=self.snapshot.base_path):
             r = self.keyspace_table_matcher.search(k.key)
             if not r:
                 continue
