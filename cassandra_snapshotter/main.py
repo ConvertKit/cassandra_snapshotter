@@ -10,7 +10,7 @@ import sys
 # From package
 from .snapshotting import (BackupWorker, RestoreWorker,
                            Snapshot, SnapshotCollection)
-from .utils import (add_s3_arguments, get_s3_connection_host)
+from .utils import add_s3_arguments
 from .utils import base_parser as _base_parser
 
 env.use_ssh_config = True
@@ -40,7 +40,7 @@ def run_backup(args):
             args.aws_secret_access_key,
             args.s3_base_path,
             args.s3_bucket_name,
-            get_s3_connection_host(args.s3_bucket_region)
+            args.s3_bucket_region
         ).get_snapshot_for(
             hosts=env.hosts,
             keyspaces=env.keyspaces,
@@ -53,7 +53,6 @@ def run_backup(args):
         aws_secret_access_key=args.aws_secret_access_key,
         s3_bucket_region=args.s3_bucket_region,
         s3_ssenc=args.s3_ssenc,
-        s3_connection_host=get_s3_connection_host(args.s3_bucket_region),
         cassandra_conf_path=args.cassandra_conf_path,
         nodetool_path=args.nodetool_path,
         cassandra_bin_dir=args.cassandra_bin_dir,
@@ -64,8 +63,8 @@ def run_backup(args):
         use_sudo=args.use_sudo,
         connection_pool_size=args.connection_pool_size,
         exclude_tables=args.exclude_tables,
-        reduced_redundancy=args.reduced_redundancy,
         rate_limit=args.rate_limit,
+        storage_class=args.storage_class,
         quiet=args.quiet
     )
 
@@ -91,7 +90,7 @@ def list_backups(args):
         args.aws_secret_access_key,
         args.s3_base_path,
         args.s3_bucket_name,
-        get_s3_connection_host(args.s3_bucket_region)
+        args.s3_bucket_region
     )
     path_snapshots = defaultdict(list)
 
@@ -113,7 +112,7 @@ def restore_backup(args):
         args.aws_secret_access_key,
         args.s3_base_path,
         args.s3_bucket_name,
-        get_s3_connection_host(args.s3_bucket_region),
+        args.s3_bucket_region,
     )
     if args.snapshot_name == 'LATEST':
         snapshot = snapshots.get_latest()
@@ -127,7 +126,8 @@ def restore_backup(args):
                            restore_dir=args.restore_dir,
                            no_sstableloader=args.no_sstableloader,
                            local_restore=args.local_restore,
-                           s3_connection_host=get_s3_connection_host(args.s3_bucket_region))
+                           s3_bucket_region=args.s3_bucket_region,
+                           s3_bucket_name=args.s3_bucket_name)
 
     if args.hosts:
         hosts = args.hosts.split(',')
@@ -253,9 +253,9 @@ def main():
         help="Number of simultaneous connections to cassandra nodes")
 
     backup_parser.add_argument(
-        '--reduced-redundancy',
-        action='store_true',
-        help="Use S3 reduced redundancy")
+        '--storage-class',
+        default='STANDARD',
+        help="S3 storage class used to store objects")
 
     backup_parser.add_argument(
         '--rate-limit',

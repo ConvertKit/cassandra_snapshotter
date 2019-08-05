@@ -8,6 +8,7 @@ install_requires = [
     'argparse',
     'fabric==1.13.1',
     'boto>=2.29.1',
+    'boto3==1.9.198',
     'pyyaml'
 ]
 
