@@ -366,7 +366,7 @@ class BackupWorker(object):
                          "--s3-base-path=%(prefix)s " \
                          "--manifest=%(manifest)s " \
                          "--bufsize=%(bufsize)s " \
-                         "--storage-class=%(storage_class)s" \    
+                         "--storage-class=%(storage_class)s " \
                          "--concurrency=4"
 
         if self.rate_limit > 0:
